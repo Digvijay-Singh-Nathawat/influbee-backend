@@ -1,0 +1,194 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  INFLUENCER
+}
+
+enum AccountType {
+  USER_WALLET
+  INFLUENCER_WALLET
+  REVENUE
+  ESCROW
+  PAYMENT_GATEWAY_LIABILITY
+}
+
+enum TransactionType {
+  CALL_PAYMENT
+  CHAT_PAYMENT
+  TOP_UP
+  REFUND
+  WITHDRAWAL
+  HOLD_FUNDS
+  SETTLE_FUNDS
+}
+
+enum TransactionStatus {
+  PENDING
+  HELD
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum EntryDirection {
+  DEBIT
+  CREDIT
+}
+
+enum CallStatus {
+  INITIATED
+  CONNECTED
+  ENDED
+  FAILED
+}
+
+enum CallType {
+  VOICE
+  VIDEO
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  username     String   @unique
+  password     String
+  role         UserRole @default(USER)
+  displayName  String?
+  avatar       String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  accounts               Account[]
+  sentMessages           Message[]       @relation("MessageSender")
+  receivedMessages       Message[]       @relation("MessageReceiver")
+  initiatedCalls         Call[]          @relation("CallInitiator")
+  receivedCalls          Call[]          @relation("CallReceiver")
+  walletTransactions     Transaction[]
+  callSessions           CallSession[]
+
+  @@map("users")
+}
+
+model Account {
+  id          String      @id @default(uuid())
+  userId      String?
+  accountType AccountType
+  currency    String      @default("INR")
+  balance     Decimal     @default(0.0000) @db.Decimal(19, 4)
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // Relations
+  user    User?   @relation(fields: [userId], references: [id])
+  entries Entry[]
+
+  @@map("accounts")
+}
+
+model Transaction {
+  id             String            @id @default(uuid())
+  idempotencyKey String?           @unique
+  type           TransactionType
+  status         TransactionStatus @default(PENDING)
+  referenceId    String?           // call_id, chat_session_id, etc.
+  metadata       Json?
+  userId         String?
+  amount         Decimal           @db.Decimal(19, 4)
+  createdAt      DateTime          @default(now())
+
+  // Relations
+  user    User?   @relation(fields: [userId], references: [id])
+  entries Entry[]
+
+  @@map("transactions")
+}
+
+model Entry {
+  id            String         @id @default(uuid())
+  transactionId String
+  accountId     String
+  amount        Decimal        @db.Decimal(19, 4)
+  direction     EntryDirection
+  createdAt     DateTime       @default(now())
+
+  // Relations
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  account     Account     @relation(fields: [accountId], references: [id])
+
+  @@map("entries")
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  senderId   String
+  receiverId String
+  content    String
+  messageId  String   @unique // For Redis mapping
+  isCharged  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime // 7 days from creation
+
+  // Relations
+  sender   User @relation("MessageSender", fields: [senderId], references: [id])
+  receiver User @relation("MessageReceiver", fields: [receiverId], references: [id])
+
+  @@map("messages")
+}
+
+model Call {
+  id                String      @id @default(uuid())
+  channelName       String      @unique
+  initiatorId       String      // This is the senderId (user who initiates)
+  receiverId        String      // This is the receiverId (influencer who receives)
+  type              CallType
+  status            CallStatus  @default(INITIATED)
+  estimatedDuration Int?        // in minutes - selected by user before call
+  estimatedCost     Decimal?    @db.Decimal(19, 4)
+  actualDuration    Int?        // in seconds - actual call duration
+  actualCost        Decimal?    @db.Decimal(19, 4)
+  terminatedBy      String?     // user ID who ended the call
+  terminationReason String?
+  agoraChannelName  String?
+  transactionId     String?     @unique
+  isCompleted       Boolean     @default(false) // Whether call was completed successfully
+  createdAt         DateTime    @default(now())
+  connectedAt       DateTime?   // When call actually connected
+  endedAt           DateTime?   // When call ended
+
+  // Relations
+  initiator    User          @relation("CallInitiator", fields: [initiatorId], references: [id])
+  receiver     User          @relation("CallReceiver", fields: [receiverId], references: [id])
+  callSessions CallSession[]
+
+  @@map("calls")
+}
+
+model CallSession {
+  id        String    @id @default(uuid())
+  callId    String
+  userId    String
+  joinedAt  DateTime  @default(now())
+  leftAt    DateTime?
+  duration  Int?      // in seconds - calculated when user leaves
+  isActive  Boolean   @default(true) // Whether user is currently in the call
+
+  // Relations
+  call Call @relation(fields: [callId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("call_sessions")
+} 
